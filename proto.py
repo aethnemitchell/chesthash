@@ -2,7 +2,7 @@ from random import randrange, choice
 import time
 import threading
 
-DATA_SIZE = 20
+DATA_SIZE = 12
 WAIT = 0.05
 DEBUG = False
 
@@ -95,20 +95,26 @@ class ServerState:
 # show
 # records
 
+#for req...
+# req another server, server will either respond with the data or "not found"
+# retrying til you dont get "not found" should work eventually
+# what if they put a truely non-existent key ?
+
 def server(initial: bool, reference_server: ServerState, idnum: int) -> None:
     print("server", idnum, ": starting...")
     # initialization
     state = ServerState(idnum)
     if initial:
+        newly_done = True
         state.memory = generate_data(DATA_SIZE)
         state.number_of_servers = 1
         #global
         servers[state.id_num] = state
     else: #join init
+        newly_done = True
         servers[state.id_num] = state
         servers[reference_server].send_message(Request(state.id_num, 0, "join")) #join-update
         while True:
-            time.sleep(WAIT)
             ref_response = state.pop_queue()
             if ref_response != None:
                 if ref_response.header == "number_of_servers":
@@ -118,7 +124,6 @@ def server(initial: bool, reference_server: ServerState, idnum: int) -> None:
                     return # @temp
         state.number_of_servers = ref_response.body[0]
         while True:
-            time.sleep(WAIT)
             ref_response = state.pop_queue()
             if ref_response != None:
                 if ref_response.header == "known_servers":
@@ -131,7 +136,6 @@ def server(initial: bool, reference_server: ServerState, idnum: int) -> None:
     # normal operation loop
 
     while state.running:
-        time.sleep(WAIT)
         if not state.serving_requests: # for testing
             continue
         state.request_queue_lock.acquire()
@@ -140,21 +144,38 @@ def server(initial: bool, reference_server: ServerState, idnum: int) -> None:
             state.request_queue = state.request_queue[1:]
             state.request_queue_lock.release()
             if req.header == "stop":
+                newly_done = True
                 print("server", state.id_num, ": received stop")
                 state.running = False
             elif req.header == "print_records":
+                newly_done = True
                 multi_line_print_lock.acquire()
                 print("server:", state.id_num, "records:")
                 for pair in state.memory:
                     print('{:5d}'.format(pair), "|", route_from_hash(pair, state.number_of_servers), "|", state.memory[pair][:40])
                 multi_line_print_lock.release()
+            elif req.header == "verify":
+                newly_done = True
+                good = True
+                for i in state.memory:
+                    if route_from_hash(i, state.number_of_servers) != state.id_num:
+                        good = False
+                print("server " + str(state.id_num) + ": " + str(good) + " assuming " + str(state.number_of_servers))
 
             elif req.header == "put":
+                newly_done = True
                 state.memory[req.key] = req.body[0]
             elif req.header == "get":
-                pass
+                newly_done = True
+                dest = route_from_hash(req.key, state.number_of_servers)
+                if dest == state.id_num:
+                    print("server:", state.id_num, "serving:", state.memory[req.key])
+                else:
+                    print("server:", state.id_num, "redirecting to:", dest)
+                    servers[dest].send_message(Request(state.id_num, req.key, "get", []))
 
             elif req.header == "join":
+                newly_done = True
                 state.number_of_servers += 1
                 servers[req.source].send_message(Request(state.id_num,
                     0, "number_of_servers", [state.number_of_servers]))
@@ -168,6 +189,7 @@ def server(initial: bool, reference_server: ServerState, idnum: int) -> None:
                         [req.source, state.number_of_servers]))
 
             elif req.header == "join_update":
+                newly_done = True
                 state.number_of_servers = req.body[1]
                 state.known_servers.append(req.body[0])
                 new_memory = {}
@@ -179,10 +201,12 @@ def server(initial: bool, reference_server: ServerState, idnum: int) -> None:
                         servers[dest].send_message(Request(state.id_num, record_key, "put", [state.memory[record_key]]))
                 state.memory = new_memory
 
-            else:
-                state.send_message(req)
         else:
             state.request_queue_lock.release()
+            if DEBUG:
+                if newly_done:
+                    print(state.id_num, "done")
+                    newly_done = False
 
 # startup // testing
 id_counter = 0
@@ -195,7 +219,7 @@ for t in threads:
     t.start()
 # a = threading.Lock() for reference acquire, release
 while True:
-    command = input(">>")
+    command = input()
     if "stop" == command: #sends
         for s in servers:
             servers[s].send_message(Request(-1, 0, "stop"))
@@ -206,6 +230,13 @@ while True:
     elif "records" == command:
         for s in servers:
             servers[s].send_message(Request(-1, 0, "print_records"))
+    elif "verify" == command:
+        for s in servers:
+            servers[s].send_message(Request(-1, 0, "verify"))
+    elif "get" == command[:3]:
+        get_target = choice(list(servers))
+        print("getting from", get_target)
+        servers[get_target].send_message(Request(-1, int(command[4:]), "get", []))
     elif "spawn" == command:
         t = threading.Thread(target=server, args=(False, choice(list(servers)), id_counter,))
         threads.append(t)
