@@ -71,9 +71,23 @@ public:
 };
 
 int main(int argc, char** argv) {
+	if (!(argc == 2 || argc == 4)){
+		std::cout << "Arguments: [self.port]" << std::endl;
+		std::cout << "Arguments: [self.port] [reach.ip] [reach.port]" << std::endl;
+		return 0;
+	}
+
+	int32_t port = std::stoi(argv[1]);
+	int32_t remote_port;
+	std::string remote_ip;
+	if (argc == 4) {
+		remote_ip = argv[2];
+		remote_port = std::stoi(argv[3]);
+	}
+
 	TSimpleServer server(
 		std::make_shared<CyhgSvcProcessor>(std::make_shared<CyhgSvcHandler>()),
-		std::make_shared<TServerSocket>(9090),
+		std::make_shared<TServerSocket>(port),
 		std::make_shared<TBufferedTransportFactory>(),
 		std::make_shared<TBinaryProtocolFactory>()
 	);
