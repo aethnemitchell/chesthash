@@ -1,10 +1,8 @@
-namespace cpp cyhg // chest yarn hash guyh
+namespace cpp cyhg // chest yarn hash guy
 
 // ************************
 // ***** Declarations *****
 // ************************
-
-const string INFO_TEXT = "chest-yarn-hash-guy-version-0.1"
 
 typedef i32 Key
 
@@ -32,7 +30,7 @@ struct ServerAddr {
 
 struct ServerList { // remains to be seen
 	1:i32 assigned_id;
-	2:list<ServerAddr> server_addr_list;
+	2:list<ServerAddr> srv_addr_list;
 }
 
 // ********************
