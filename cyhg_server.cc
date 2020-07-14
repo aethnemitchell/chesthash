@@ -16,8 +16,8 @@
 #include "gen-cpp/CyhgSvc.h"
 #include <map>
 #include <string>
-
-#include "hash.h"
+#include <chrono>
+#include
  
 #define INFO_TEXT "chest-yarn-hash-guy version 0.1 jul-13/2020"
 
@@ -31,13 +31,14 @@ class CyhgSvcHandler : public CyhgSvcIf {
 	int32_t id; // set by rpc:assign_id
 	ServerAddr own_addr; // set by rpc:assign_addr
 	std::map<Key, std::string> record_map; // intialized empty
-	int32_t known_num_srvs; // set by rpc:initial
+	int32_t known_num_srvs = 1; // set by rpc:initial
 	std::map<int32_t, ServerAddr> known_srv_map;
+	std::hash<std::string> string_hash;
 public:
 	CyhgSvcHandler() = default;
 
 	int32_t dist_func(const Key& key, int32_t number_of_servers) {
-		return (int32_t)string_hash(key) % number_of_servers; // see if i care dude
+		return (string_hash(key) % number_of_servers); // see if i care dude
 	}
 
 	void ping() override { std::cout << "ping received" << std::endl; }
@@ -45,8 +46,9 @@ public:
 
 	void get(Record& rec_out, const Key& key) override { // @test
 		Record rec;
-	
+		std::cout << known_num_srvs << "?" << std::endl;
 		int32_t dest = dist_func(key, known_num_srvs);
+		std::cout << dest <<":"<<key << std::endl;
 		if (dest != id) {
 			ServerAddr target_addr = known_srv_map[dest];
 			std::shared_ptr<TTransport> socket(new TSocket(
@@ -68,6 +70,7 @@ public:
 	}
 
 	void put(const Record& rec) override { // @todo redirect
+		std::cout << "put: " << rec.key << std::endl;
 		record_map[rec.key] = rec.data;
 	}
 
@@ -90,10 +93,11 @@ public:
 	}
 
 	void initial() {
+		std::cout << "initialized" << std::endl;
 		known_num_srvs = 1;
 		id = 0;
 	}
-
+	
 	void get_keys(std::vector<Key>& keyl_out) override {
 		std::vector<Key> keyl;
 		for (auto [k,_] : record_map) {
@@ -140,6 +144,8 @@ int main(int argc, char** argv) { // main function is gonna initialize server on
 		ServerAddr thisAddr;
 		thisAddr.ip = this_ip;;
 		thisAddr.port = this_port;
+
+		// intialize stuff
 
 		client.initial();
 		client.assign_addr(thisAddr);

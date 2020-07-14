@@ -34,13 +34,13 @@ int main (int argc, char** argv) {
 	std::cout << "[client] recieved: " << s << std::endl;
 
 	Record rec;
-	rec.key = 0;
-	rec.data = "wew lad";
+	rec.key = "wew";
+	rec.data = "wew lad value wow dude!";
 
 	client.put(rec);
 
 	Record rec_recvd;
-	client.get(rec_recvd, 0);
+	client.get(rec_recvd, "wew");
 	std::cout << rec_recvd.key << ": " << rec_recvd.data << std::endl;
 
 	socket->close();
