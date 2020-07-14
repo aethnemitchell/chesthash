@@ -4,7 +4,7 @@ namespace cpp cyhg // chest yarn hash guy
 // ***** Declarations *****
 // ************************
 
-typedef i32 Key
+typedef string Key
 
 enum RequestType {
 	GET,
@@ -23,15 +23,10 @@ struct Record {
 }
 
 struct ServerAddr {
-	1:string id;
 	2:string ip;
 	3:i32 port;
 }
 
-struct ServerList { // remains to be seen
-	1:i32 assigned_id;
-	2:list<ServerAddr> srv_addr_list;
-}
 
 // ********************
 // ***** Services *****
@@ -44,8 +39,11 @@ service CyhgSvc { // oneway...
 	Record get(1:Key key); // return record
 	void put(1:Record record);
 
-	ServerList join(); // id should be decided by network at this time, new id = num of servers-1
-	void join_update(1:ServerAddr new_addr, 2:i32 new_number_of_servers);
+	map<i32, ServerAddr> join(1:ServerAddr self_addr);
+	void join_update(1:ServerAddr new_addr, 2:i32 new_id, 3:i32 new_number_of_servers);
+	void assign_id(1:i32 id);
+	void assign_addr(1:ServerAddr addr);
+	void initial();
 
 	list<Key> get_keys(); // mostly for debugging
 
