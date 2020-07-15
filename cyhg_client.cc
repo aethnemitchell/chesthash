@@ -12,38 +12,57 @@ using namespace apache::thrift::protocol;
 using namespace cyhg;
 
 int main (int argc, char** argv) {
-	if (argc != 3) {
-		std::cout << "Arguments: [ip] [port]" << std::endl;
+	if (argc != 2) {
+		std::cout << "Arguments: [ip]" << std::endl;
 	}
-	int32_t port = std::stoi(argv[2]);
+
 	std::string ip = argv[1];
 
-	std::shared_ptr<TTransport> socket(new TSocket(ip, port));
-	std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-	std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-	CyhgSvcClient client(protocol);
+	int port;
+	int req; // 0 get 1 put
+	std::string key;
+	std::string data;
 
-	socket->open();
+	std::cout << "port 01getput" << std::endl;
+		
+	while (true) {
+		std::cin >> port >> req;
+		if (req == 0) {
+			std::cout << "key: " << std::endl;
+			std::cin >> key;
+		} else {
+			std::cout << "key value: " << std::endl;
+			std::cin >> key >> data;
+		}
 
-	/*
-	 * test shit
-	 */
+		std::shared_ptr<TTransport> socket(new TSocket(ip, port));
+		std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
+		std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
+		CyhgSvcClient client(protocol);
 
-	std::string s;
-	client.info(s); //(msg)
-	std::cout << "[client] recieved: " << s << std::endl;
+		socket->open();
 
-	Record rec;
-	rec.key = "wew";
-	rec.data = "wew lad value wow dude!";
+		/*
+		 * test shit
+		 */
 
-	client.put(rec);
+		std::string s;
 
-	Record rec_recvd;
-	client.get(rec_recvd, "wew");
-	std::cout << rec_recvd.key << ": " << rec_recvd.data << std::endl;
+		if (req == 1) {
+			Record rec;
+			rec.key = key;
+			rec.data = data;
+			client.put(rec);
+		} else if (req == 0) {
+			Record rec_recvd;
+			client.get(rec_recvd, key);
+			std::cout << rec_recvd.key << ": " << rec_recvd.data << " from " << port << std::endl;
+		} else if (req == 9) {
+			break;
+		}
 
-	socket->close();
+		socket->close();
+	}
 
 	return 0;
 }
