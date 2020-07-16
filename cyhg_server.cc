@@ -40,14 +40,18 @@ public:
 	}
 	CyhgSvcHandler(ServerAddr& given_addr, ServerAddr contact_addr) {
 		own_addr = given_addr;
-		
 		// call join on remote entry server
 		std::shared_ptr<TTransport> socket(new TSocket(contact_addr.ip, contact_addr.port));
 		std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
 		std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
 		CyhgSvcClient remote(protocol);
 		socket->open();
-		remote.join(known_srv_map, own_addr);
+		JoinStruct recvd_join_struct;
+		remote.join(recvd_join_struct, own_addr);
+		known_srv_map = recvd_join_struct.srvm_out;
+		for (Record r : recvd_join_struct.given_records) {
+			record_map[r.key] = r.data;
+		}
 		id = known_srv_map.size(); // @todo
 		known_num_srvs = id + 1;
 		socket->close();
@@ -93,7 +97,7 @@ public:
 		if (dest == id) { // put in map
 			record_map[rec.key] = rec.data;
 		} else { // send to correct peer
-			std::cout << "w" << known_srv_map[dest].port << std::endl;
+			std::cout << "sending to >> " << known_srv_map[dest].port << std::endl;
 			std::shared_ptr<TTransport> socket(new TSocket(
 						known_srv_map[dest].ip,
 					 	known_srv_map[dest].port));
@@ -106,70 +110,109 @@ public:
 		}
 	}
 
-	void join(std::map<int32_t, ServerAddr>& srvm_out, const ServerAddr& joining_addr) override {
+	void join(JoinStruct& join_struct, const ServerAddr& joining_addr) override {
 		std::cout << id << " join from " << joining_addr.port << std::endl;
+		std::map<int32_t, ServerAddr> srvm_out;
 		srvm_out = known_srv_map;
 		srvm_out[id] = own_addr;
+		join_struct.srvm_out = srvm_out;
+
 		int32_t new_id = known_num_srvs;
 		known_num_srvs++;
 
-		// notify all other servers
+		std::vector<Record> records_in;
+		// notify all other servers, they will also return the proper records here
 		for (auto [_,sa] : known_srv_map) {
-			std::cout << id << " telling " << sa.port << " to join too" << std::endl;
+			std::cout << id << " join-updating " << sa.port << std::endl;
 			std::shared_ptr<TTransport> socket(new TSocket(sa.ip, sa.port));
 			std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
 			std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
 			CyhgSvcClient remote(protocol);
+
 			socket->open();
-			remote.join_update(joining_addr, new_id, known_num_srvs);
+			remote.join_update(records_in, joining_addr, new_id, known_num_srvs, id);
 			socket->close();
+
+			for (Record r : records_in) {
+				record_map[r.key] = r.data;
+			}
+			records_in.clear();
 		}
 
 		known_srv_map[new_id] = joining_addr;
+
+		// move
+		std::vector<Record> recs_out;
 
 		// distribute files, basically join update but its easier to just duplicate the code
 		// more efficient to go 1 peer at a time sorting files by peer dest
 		// @todo construct CyhgSvcClient objects/socket objects at join time and store
 		for (auto [k,_] : record_map) {
 			int32_t dest = dest_func(k, known_num_srvs);
-			std::cout << id << " distributing " << k << " to " << dest << std::endl;
-			
-			ServerAddr sa = known_srv_map[dest];
 
-			std::shared_ptr<TTransport> socket(new TSocket(sa.ip, sa.port));
-			std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-			std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-			CyhgSvcClient remote(protocol);
-			socket->open();
-			Record rec_to_send;
-			rec_to_send.key = k;
-			rec_to_send.data = record_map[k];
-			remote.put(rec_to_send);
-			socket->close();
+			if (dest != id) {
+				std::cout << id << " distributing " << k << " to " << dest << std::endl;
+				
+				if (dest == new_id) {
+					Record temp_rec;
+					temp_rec.key = k;
+					temp_rec.data = record_map[k];
+					recs_out.push_back(temp_rec);
+				} else {
+
+					ServerAddr sa = known_srv_map[dest];
+
+					std::shared_ptr<TTransport> socket(new TSocket(sa.ip, sa.port));
+					std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
+					std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
+					CyhgSvcClient remote(protocol);
+					socket->open();
+					Record rec_to_send;
+					rec_to_send.key = k;
+					rec_to_send.data = record_map[k];
+					remote.put(rec_to_send);
+					socket->close();
+				}
+			}
 		}
+		join_struct.given_records = recs_out;
 	}
 
-	void join_update(const ServerAddr& new_addr, int32_t new_id, const int32_t new_number_of_srvs) override { // do
-		std::cout << id << " join update recvd" << std::endl;
+	void join_update(std::vector<Record>& recs_for_caller, const ServerAddr& new_addr, int32_t new_id, int32_t new_number_of_srvs, int32_t caller_id) override { // do
+		std::cout << id << " join-update recvd" << std::endl;
 
 		known_srv_map[new_id] = new_addr;
 		known_num_srvs = new_number_of_srvs;
-		/*
+
 		for (auto [k,_] : record_map) {
 			int32_t dest = dest_func(k, known_num_srvs);
-			std::cout << id << " distributing " << k << " to " << dest << std::endl;
-			
-			sa = known_srv_map[dest];
+			if (dest == id) {
+				continue;
+			} 
+			if (dest == caller_id) {
+				Record temp_rec;
+				temp_rec.key = k;
+				temp_rec.data = record_map[k];
+				recs_for_caller.push_back(temp_rec);
+			} else {
+				std::cout << id << " distributing " << k << " to " << dest << std::endl;
+				
+				ServerAddr sa = known_srv_map[dest];
 
-			std::shared_ptr<TTransport> socket(new TSocket(sa.ip, sa.port));
-			std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-			std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-			CyhgSvcClient remote(protocol);
-			socket->open();
-			remote.put(record_map[k])
-			socket->close();
+				std::shared_ptr<TTransport> socket(new TSocket(sa.ip, sa.port));
+				std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
+				std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
+				CyhgSvcClient remote(protocol);
+				socket->open();
+
+				Record out_rec;
+				out_rec.key = k;
+				out_rec.data = record_map[k];
+
+				remote.put(out_rec);
+				socket->close();
+			}
 		}
-		*/
 	}
 
 	void assign_id(const int32_t assigned_id) {
@@ -245,12 +288,4 @@ int main(int argc, char** argv) {
 
 	return 1;
 }
-int32_t JumpConsistentHash(uint64_t key, int32_t num_buckets) {
-int64_t b = ­1, j = 0;
-while (j < num_buckets) {
-b = j;
-key = key * 2862933555777941757ULL + 1;
-j = (b + 1) * (double(1LL << 31) / double((key >> 33) + 1));
-}
-return b;
-}
+

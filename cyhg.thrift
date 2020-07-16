@@ -23,10 +23,14 @@ struct Record {
 }
 
 struct ServerAddr {
-	2:string ip;
-	3:i32 port;
+	1:string ip;
+	2:i32 port;
 }
 
+struct JoinStruct {
+	1: map<i32, ServerAddr> srvm_out;
+	2: list<Record> given_records;
+}
 
 // ********************
 // ***** Services *****
@@ -39,8 +43,9 @@ service CyhgSvc { // oneway...
 	Record get(1:Key key); // return record
 	void put(1:Record record);
 
-	map<i32, ServerAddr> join(1:ServerAddr joining_addr);
-	void join_update(1:ServerAddr new_addr, 2:i32 new_id, 3:i32 new_number_of_servers);
+//	map<i32, ServerAddr> join(1:ServerAddr joining_addr);
+	JoinStruct join(1:ServerAddr joining_addr);
+	list<Record> join_update(1:ServerAddr new_addr, 2:i32 new_id, 3:i32 new_number_of_srvs, 4:i32 caller_id);
 	void assign_id(1:i32 id);
 	void assign_addr(1:ServerAddr addr);
 	void initial();
