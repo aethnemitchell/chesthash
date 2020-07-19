@@ -19,13 +19,14 @@
 #include "log.h"
 
 #define INFO_TEXT "Hash-Guy version 0.3 jul-17/2020"
+
 using namespace apache::thrift;
 using namespace apache::thrift::protocol;
 using namespace apache::thrift::transport;
 using namespace apache::thrift::server;
 using namespace cyhg;
 
-typedef tbb::concurrent_unordered_map<std::string, std::string> tbb_un_map;
+typedef tbb::concurrent_unordered_map<Key, std::string> tbb_un_map;
 
 class CyhgSvcHandler : public CyhgSvcIf {
 	std::unique_ptr<Logger> 			logger;
@@ -78,9 +79,10 @@ class CyhgSvcHandler : public CyhgSvcIf {
 
 	CyhgSvcHandler(ServerAddr& local_addr, Logger::LogLevel logging_level) {
 		// initial node constructor
+		logger = std::unique_ptr<Logger>(new Logger(logging_level));
+		
 		node_id = 0;
 		logger->name = "Server " + std::to_string(node_id);
-		logger->log_level = logging_level;
 		node_addr = local_addr;
 		node_init = true;
 		node_last = true;
@@ -165,7 +167,7 @@ class CyhgSvcHandler : public CyhgSvcIf {
 	}
 
 	void join_response(const JoinStruct& join_struct) {
-		JoinStruct join_struct_recvd = join_struct; // @todo lazy
+		JoinStruct join_struct_recvd = join_struct; // @todo is there a way to not copy?
 		node_id = join_struct_recvd.assigned_id;
 		logger->name = "Server " + std::to_string(node_id);
 		logger->log(Logger::Debug, "join-response");
@@ -188,19 +190,22 @@ class CyhgSvcHandler : public CyhgSvcIf {
 			return;
 		} 
 
-		// we do not need to go through our list and pack moving_records further if we
-		// are not getting a new new_num_srvs
-		// simply take and forward
 
 		if (new_num_srvs == srvs_in_ring) {
+			// we do not need to go through our list and pack moving_records further if we
+			// are not getting a new new_num_srvs
+			// simply take and forward
+
 			for (const Record& rec : moving_records[node_id]) {
 				record_map[rec.key] = rec.value;
 			}
+		} else {
+			// if it is the first time we are seeing this structure, then we must populate it as well
+
+			
+
+			tbb_un_map new_record_map; // @todo
 		}
-
-		// if it is the first time we are seeing this structure, then we must populate it as well
-
-		tbb_un_map new_record_map; // @todo
 	}
 
 	void change_next(const ServerAddr& assigned_next) override {
@@ -210,10 +215,9 @@ class CyhgSvcHandler : public CyhgSvcIf {
 		std::shared_ptr<TTransport> next_transport(new TBufferedTransport(next_socket));
 		std::shared_ptr<TProtocol> next_protocol(new TBinaryProtocol(next_transport));
 		next_rpc_client = std::unique_ptr<CyhgSvcClient>(new CyhgSvcClient(next_protocol));
-		// memory leak? @fix
 	}
 
-	void get(GetResponse& response, const Key& key) override { // @todo not found etc
+	void get(GetResponse& response, const Key& key) override {
 		if (record_map.count(key) != 0) {
 			response.record.key = key;
 			response.record.value = record_map[key];
