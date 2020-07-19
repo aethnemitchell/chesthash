@@ -1,57 +1,47 @@
 namespace cpp cyhg // chest yarn hash guy
 
-// ************************
 // ***** Declarations *****
-// ************************
 
 typedef string Key
 
-enum RequestType {
-	GET,
-	PUT,
-	JOIN,
-	JOIN_UPDATE,
-	PING,
-	STOP
-	//LEAVE
-	//LEAVE_UPDATE
-}
-
 struct Record {
-	1:Key key;
-	2:string data;
+	1:required Key key;
+	2:string value;
 }
 
 struct ServerAddr {
-	1:string ip;
-	2:i32 port;
+	1:required string ip;
+	2:required i32 port;
 }
 
 struct JoinStruct {
-	1: map<i32, ServerAddr> srvm_out;
-	2: list<Record> given_records;
+	1:required ServerAddr assigned_next;
+	2:required i32 assigned_id;
+	3:required i32 informed_num_srvs;
 }
 
-// ********************
+enum StatusCode {
+	OK, // all good
+	NOT_FOUND, // if not found in the place it should be... shouldnt happen :^)
+	NOT_READY // if server is still starting up + being populated
+}
+
+struct GetResponse {
+	1:required StatusCode status;
+	2:Record record;
+}
+
 // ***** Services *****
-// ********************
 
-service CyhgSvc { // oneway...
-	void ping();
-	void stop();
+service CyhgSvc {
+	void ping(1:i32 source);
 
-	Record get(1:Key key); // return record
-	void put(1:Record record);
+	GetResponse get(1: Key key);
+	void put(1: Record record);
 
-//	map<i32, ServerAddr> join(1:ServerAddr joining_addr);
-	JoinStruct join(1:ServerAddr joining_addr);
-	list<Record> join_update(1:ServerAddr new_addr, 2:i32 new_id, 3:i32 new_number_of_srvs, 4:i32 caller_id);
-	void assign_id(1:i32 id);
-	void assign_addr(1:ServerAddr addr);
-	void initial();
-
-	list<Key> get_keys(); // mostly for debugging
-
-	string info();
+	oneway void join(1: ServerAddr joining_addr);
+	oneway void join_response(1: JoinStruct join_struct);
+	oneway void join_update(1: i32 new_num_srvs, 2: list<list<Record>> moving_records);
+	oneway void change_next(1: ServerAddr assigned_next);
 }
 

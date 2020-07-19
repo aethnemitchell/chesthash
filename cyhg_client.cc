@@ -6,62 +6,71 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <chrono>
+#include <thread>
 
 using namespace apache::thrift::transport;
 using namespace apache::thrift::protocol;
 using namespace cyhg;
 
+#define RECORDS 1000000
+
+void gen_random(std::string s, const int len) {
+    static const char alphanum[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    for (int i = 0; i < len; ++i) {
+        s[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+    }
+
+    s[len] = 0;
+}
+
 int main (int argc, char** argv) {
-	if (argc != 2) {
-		std::cout << "Arguments: [ip]" << std::endl;
-	}
+	using namespace std::chrono;
 
-	std::string ip = argv[1];
+	int num_threads = 80;
+	std::thread thread_pool[num_threads];
 
-	int port;
-	int req; // 0 get 1 put
-	std::string key;
-	std::string data;
 
-	std::cout << "port 01getput" << std::endl;
-		
-	while (true) {
-		std::cin >> port >> req;
-		if (req == 0) {
-			std::cout << "key: " << std::endl;
-			std::cin >> key;
-		} else {
-			std::cout << "key value: " << std::endl;
-			std::cin >> key >> data;
+	for (int iters=0; iters < 10; iters++) {
+		auto start = high_resolution_clock::now();
+		for (int t=0; t<num_threads; t++) {
+			thread_pool[t] = std::thread([num_threads]() {
+				std::string ip = "localhost";
+				uint16_t port = 5700;
+				std::shared_ptr<TTransport> socket(new TSocket(ip, port));
+				std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
+				std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
+				CyhgSvcClient client(protocol);
+				std::vector<std::string> keys;
+				socket->open();
+				for (int i=0; i<RECORDS/num_threads; i++) {
+					Record rec;
+					GetResponse gr;
+					gen_random(rec.key, 3);
+					gen_random(rec.value, 10);
+					if ((rand() % 100) <= 20) {
+						client.put(rec);
+					} else {
+						client.get(gr, rec.key);
+					}
+					keys.push_back(rec.key);
+				}
+				socket->close();
+			});
 		}
 
-		std::shared_ptr<TTransport> socket(new TSocket(ip, port));
-		std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-		std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-		CyhgSvcClient client(protocol);
-
-		socket->open();
-
-		/*
-		 * test shit
-		 */
-
-		std::string s;
-
-		if (req == 1) {
-			Record rec;
-			rec.key = key;
-			rec.data = data;
-			client.put(rec);
-		} else if (req == 0) {
-			Record rec_recvd;
-			client.get(rec_recvd, key);
-			std::cout << rec_recvd.key << ": " << rec_recvd.data << " from " << port << std::endl;
-		} else if (req == 9) {
-			break;
+		for (int t=0; t<num_threads; t++) {
+			thread_pool[t].join();
 		}
 
-		socket->close();
+		auto stop = high_resolution_clock::now();
+
+
+		auto duration = duration_cast<microseconds>(stop - start);
+		std::cout << duration.count()/1000 << " ms" << std::endl;
+		std::cout << RECORDS/(duration.count()/1000.0) << " records / ms" << std::endl;
 	}
 
 	return 0;

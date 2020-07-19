@@ -1,255 +1,236 @@
-// cyhg_server.cc
-//
-// 1: itll pay off 
-// a: well see
-// 1: you dont think it will?
-// a: i dont know, anything to keep me out of web dev
-// 1: that is really, really, really correct
-
 #include <iostream>
+#include <map>
+#include <string>
+#include <chrono>
+#include <memory>
+
 #include <thrift/transport/TSocket.h>
 #include <thrift/transport/TBufferTransports.h>
 #include <thrift/transport/TServerSocket.h>
 #include <thrift/transport/TTransportUtils.h>
 #include <thrift/protocol/TBinaryProtocol.h>
-#include <thrift/server/TSimpleServer.h>
-#include "gen-cpp/CyhgSvc.h"
-#include <map>
-#include <string>
-#include <chrono>
-#include "hash.h"
- 
-#define INFO_TEXT "chest-yarn-hash-guy version 0.1 jul-15/2020"
+#include <thrift/server/TThreadedServer.h>
 
+#include "tbb/concurrent_unordered_map.h"
+
+#include "gen-cpp/CyhgSvc.h"
+#include "hash.h"
+#include "log.h"
+ 
+#define INFO_TEXT "Hash-Guy version 0.3 jul-17/2020"
 using namespace apache::thrift;
 using namespace apache::thrift::protocol;
 using namespace apache::thrift::transport;
 using namespace apache::thrift::server;
 using namespace cyhg;
 
+typedef tbb::concurrent_unordered_map<std::string, std::string> tbb_un_map;
+
 class CyhgSvcHandler : public CyhgSvcIf {
-	int32_t id; // set by rpc:assign_id
-	ServerAddr own_addr; // set by rpc:assign_addr
-	std::map<Key, std::string> record_map; // intialized empty
-	int32_t known_num_srvs = 1; // set by rpc:initial
-	std::map<int32_t, ServerAddr> known_srv_map;
-public:
-	CyhgSvcHandler() = default;
-	CyhgSvcHandler(ServerAddr& given_addr) {
-		own_addr = given_addr;
-	}
-	CyhgSvcHandler(ServerAddr& given_addr, ServerAddr contact_addr) {
-		own_addr = given_addr;
-		// call join on remote entry server
-		std::shared_ptr<TTransport> socket(new TSocket(contact_addr.ip, contact_addr.port));
-		std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-		std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-		CyhgSvcClient remote(protocol);
-		socket->open();
-		JoinStruct recvd_join_struct;
-		remote.join(recvd_join_struct, own_addr);
-		known_srv_map = recvd_join_struct.srvm_out;
-		for (Record r : recvd_join_struct.given_records) {
-			record_map[r.key] = r.data;
-		}
-		id = known_srv_map.size(); // @todo
-		known_num_srvs = id + 1;
-		socket->close();
-	}
+	std::unique_ptr<Logger> 			logger;
+	tbb_un_map							record_map;
+
+	int32_t 							node_id;
+	ServerAddr 							node_addr;
+	bool								node_init;
+	bool								node_last;
+	bool								node_rdy;
+
+	int32_t								srvs_in_ring;
+
+	ServerAddr							next_addr;
+	std::shared_ptr<TTransport> 		next_socket;
+	std::unique_ptr<CyhgSvcClient>		next_rpc_client;
+
+	// only the init node stores these
+	ServerAddr							last_addr;
+	std::shared_ptr<TTransport> 		last_socket;
+	std::unique_ptr<CyhgSvcClient>		last_rpc_client;
+
+	// only non-init nodes store these (init node)
+	ServerAddr							init_addr;
+	std::shared_ptr<TTransport> 		init_socket;
+	std::unique_ptr<CyhgSvcClient>		init_rpc_client;
 
 	int32_t dest_func(const Key& key, int32_t number_of_servers) {
-		return (string_hash(key) % number_of_servers); // see if i care dude
+		return (string_hash(key) % number_of_servers);
 	}
 
-	void ping() override { std::cout << "ping received" << std::endl; }
-	void stop() override { std::cout << "stopping" << std::endl; } // @todo
-
-	// todo get/put multi record
-	void get(Record& rec_out, const Key& key) override { // @test
+	Record make_record(const Key& key, const std::string val) {
 		Record rec;
-		int32_t dest = dest_func(key, known_num_srvs);
-		std::cout << id << " get: " << key << " dest " << dest << std::endl;
-		if (dest != id) {
-			ServerAddr target_addr = known_srv_map[dest];
-			std::cout << "----redirecting to " << target_addr.ip << std::endl;
-			std::shared_ptr<TTransport> socket(new TSocket(
-						target_addr.ip,
-						target_addr.port));
-			std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-			std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-			CyhgSvcClient remote(protocol);
-			socket->open();
-			Record rec_recvd;
-			remote.get(rec_recvd, key);
-			socket->close();
-			rec = rec_recvd;
-		} else {
-			rec.key = key;
-			rec.data = record_map[key];
-		}
-		rec_out = rec;
+		rec.key = key;
+		rec.value = val;
+		return rec;
 	}
 
-	void put(const Record& rec) override { // @todo redirect
-		int32_t dest = dest_func(rec.key, known_num_srvs);
-		std::cout << known_num_srvs << " hmm.." << std::endl;
-		std::cout << id << " put: " << rec.key << " - " << dest << std::endl;
-		if (dest == id) { // put in map
-			record_map[rec.key] = rec.data;
-		} else { // send to correct peer
-			std::cout << "sending to >> " << known_srv_map[dest].port << std::endl;
-			std::shared_ptr<TTransport> socket(new TSocket(
-						known_srv_map[dest].ip,
-					 	known_srv_map[dest].port));
-			std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-			std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-			CyhgSvcClient remote(protocol);
-			socket->open();
-			remote.put(rec);
-			socket->close();
-		}
-	}
-
-	void join(JoinStruct& join_struct, const ServerAddr& joining_addr) override {
-		std::cout << id << " join from " << joining_addr.port << std::endl;
-		std::map<int32_t, ServerAddr> srvm_out;
-		srvm_out = known_srv_map;
-		srvm_out[id] = own_addr;
-		join_struct.srvm_out = srvm_out;
-
-		int32_t new_id = known_num_srvs;
-		known_num_srvs++;
-
-		std::vector<Record> records_in;
-		// notify all other servers, they will also return the proper records here
-		for (auto [_,sa] : known_srv_map) {
-			std::cout << id << " join-updating " << sa.port << std::endl;
-			std::shared_ptr<TTransport> socket(new TSocket(sa.ip, sa.port));
-			std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-			std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-			CyhgSvcClient remote(protocol);
-
-			socket->open();
-			remote.join_update(records_in, joining_addr, new_id, known_num_srvs, id);
-			socket->close();
-
-			for (Record r : records_in) {
-				record_map[r.key] = r.data;
-			}
-			records_in.clear();
-		}
-
-		known_srv_map[new_id] = joining_addr;
-
-		// move
-		std::vector<Record> recs_out;
-
-		// distribute files, basically join update but its easier to just duplicate the code
-		// more efficient to go 1 peer at a time sorting files by peer dest
-		// @todo construct CyhgSvcClient objects/socket objects at join time and store
-		for (auto [k,_] : record_map) {
-			int32_t dest = dest_func(k, known_num_srvs);
-
-			if (dest != id) {
-				std::cout << id << " distributing " << k << " to " << dest << std::endl;
-				
-				if (dest == new_id) {
-					Record temp_rec;
-					temp_rec.key = k;
-					temp_rec.data = record_map[k];
-					recs_out.push_back(temp_rec);
-				} else {
-
-					ServerAddr sa = known_srv_map[dest];
-
-					std::shared_ptr<TTransport> socket(new TSocket(sa.ip, sa.port));
-					std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-					std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-					CyhgSvcClient remote(protocol);
-					socket->open();
-					Record rec_to_send;
-					rec_to_send.key = k;
-					rec_to_send.data = record_map[k];
-					remote.put(rec_to_send);
-					socket->close();
-				}
+	bool check_empty(const std::vector<std::vector<Record>>& r) {
+		for (auto v : r) {
+			if (v.size() > 0) {
+				return false;
 			}
 		}
-		join_struct.given_records = recs_out;
+		return true;
 	}
 
-	void join_update(std::vector<Record>& recs_for_caller, const ServerAddr& new_addr, int32_t new_id, int32_t new_number_of_srvs, int32_t caller_id) override { // do
-		std::cout << id << " join-update recvd" << std::endl;
+public:
+	CyhgSvcHandler()  = default;
 
-		known_srv_map[new_id] = new_addr;
-		known_num_srvs = new_number_of_srvs;
+	CyhgSvcHandler(ServerAddr& local_addr, Logger::LogLevel logging_level) {
+	// initial node constructor
+		node_id = 0;
+		logger->name = "Server " + std::to_string(node_id);
+		logger->log_level = logging_level;
+		node_addr = local_addr;
+		node_init = true;
+		node_last = true;
+		node_rdy = true;
 
-		for (auto [k,_] : record_map) {
-			int32_t dest = dest_func(k, known_num_srvs);
-			if (dest == id) {
-				continue;
-			} 
-			if (dest == caller_id) {
-				Record temp_rec;
-				temp_rec.key = k;
-				temp_rec.data = record_map[k];
-				recs_for_caller.push_back(temp_rec);
+		srvs_in_ring = 1;
+
+		logger->log(Logger::Info, "Started.");
+	}
+
+	CyhgSvcHandler(ServerAddr&  local_addr, ServerAddr& join_node_addr, Logger::LogLevel logging_level) {
+	// joiner node constructor
+		node_addr = local_addr;
+		node_init = false;
+		node_last = true;
+		node_rdy = false;
+		logger->log_level = logging_level;
+
+		// contact init node for network data, populate fields
+		init_addr = join_node_addr;
+		init_socket = std::shared_ptr<TTransport>(new TSocket(init_addr.ip, init_addr.port));
+		std::shared_ptr<TTransport> init_transport(new TBufferedTransport(init_socket));
+		std::shared_ptr<TProtocol> init_protocol(new TBinaryProtocol(init_transport));
+		init_rpc_client = std::unique_ptr<CyhgSvcClient>(new CyhgSvcClient(init_protocol));
+
+		init_socket->open();
+		init_rpc_client->join(node_addr);
+		init_socket->close();
+	}
+
+	void ping(int32_t source) override {
+		logger->log(Logger::Info, "pinged by " + std::to_string(source));
+	}
+
+	void join(const ServerAddr& joining_addr) override { // bit of a chungus
+		logger->log(Logger::Debug, "join");
+		if (node_id != 0) logger->log(Logger::Warning, "JOIN ON NON-INIT NODE");
+
+		JoinStruct join_struct;
+		join_struct.assigned_next = node_addr;
+		join_struct.assigned_id = srvs_in_ring;
+		join_struct.informed_num_srvs = ++srvs_in_ring;
+
+		last_addr = joining_addr;
+		last_socket = std::shared_ptr<TTransport>(new TSocket(last_addr.ip, last_addr.port));
+		std::shared_ptr<TTransport> last_transport(new TBufferedTransport(last_socket));
+		std::shared_ptr<TProtocol> last_protocol(new TBinaryProtocol(last_transport));
+		last_rpc_client = std::unique_ptr<CyhgSvcClient>(new CyhgSvcClient(last_protocol));
+
+		last_socket->open();
+		last_rpc_client->join_response(join_struct);
+		last_socket->close();
+		
+		// new server has been intialized.
+		// repopulate and inform
+
+		if (srvs_in_ring == 2) {
+			next_addr = joining_addr;
+			next_socket = std::shared_ptr<TTransport>(new TSocket(next_addr.ip, next_addr.port));
+			std::shared_ptr<TTransport> next_transport(new TBufferedTransport(next_socket));
+			std::shared_ptr<TProtocol> next_protocol(new TBinaryProtocol(next_transport));
+			next_rpc_client = std::unique_ptr<CyhgSvcClient>(new CyhgSvcClient(next_protocol));
+		}
+		
+		std::vector<std::vector<Record>> moving_records(srvs_in_ring);
+		std::map<Key, std::string> new_record_map;
+
+		for (const auto& [k, v] : record_map) {
+			auto dest = dest_func(k, srvs_in_ring);
+			if (dest == node_id) { // aka dest == 0
+				new_record_map[k] = v;
 			} else {
-				std::cout << id << " distributing " << k << " to " << dest << std::endl;
-				
-				ServerAddr sa = known_srv_map[dest];
-
-				std::shared_ptr<TTransport> socket(new TSocket(sa.ip, sa.port));
-				std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
-				std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-				CyhgSvcClient remote(protocol);
-				socket->open();
-
-				Record out_rec;
-				out_rec.key = k;
-				out_rec.data = record_map[k];
-
-				remote.put(out_rec);
-				socket->close();
+				moving_records[dest].push_back(make_record(k, v));
 			}
 		}
+
+		next_socket->open();
+		next_rpc_client->join_update(srvs_in_ring, moving_records);
+		next_socket->close();
 	}
 
-	void assign_id(const int32_t assigned_id) {
-		id = assigned_id;
+	void join_response(const JoinStruct& join_struct) {
+		JoinStruct join_struct_recvd = join_struct; // @todo lazy
+		node_id = join_struct_recvd.assigned_id;
+		logger->name = "Server " + std::to_string(node_id);
+		logger->log(Logger::Debug, "join-response");
+
+		srvs_in_ring = join_struct_recvd.informed_num_srvs;
+		next_addr = join_struct_recvd.assigned_next;
+
+		next_socket = std::shared_ptr<TTransport>(new TSocket(next_addr.ip, next_addr.port));
+		std::shared_ptr<TTransport> next_transport(new TBufferedTransport(next_socket));
+		std::shared_ptr<TProtocol> next_protocol(new TBinaryProtocol(next_transport));
+		next_rpc_client = std::unique_ptr<CyhgSvcClient>(new CyhgSvcClient(next_protocol));
+
+		logger->log(Logger::Info, "Started.");
 	}
 
-	void assign_addr(const ServerAddr& assigned_addr) {
-		own_addr = assigned_addr;
-	}
+	void join_update(int32_t new_num_srvs, const std::vector<std::vector<Record>>& moving_records) override {
+		logger->log(Logger::Debug, "join-update");
 
-	void initial() {
-		std::cout << "initialized" << std::endl;
-		known_num_srvs = 1;
-		id = 0;
-	}
+		if (check_empty(moving_records)) {
+			return;
+		} 
 
-	void get_keys(std::vector<Key>& keyl_out) override {
-		std::vector<Key> keyl;
-		for (auto [k,_] : record_map) {
-			keyl.push_back(k);
+		// we do not need to go through our list and pack moving_records further if we
+		// are not getting a new new_num_srvs
+		// simply take and forward
+		
+		if (new_num_srvs == srvs_in_ring) {
+			for (const Record& rec : moving_records[node_id]) {
+				record_map[rec.key] = rec.value;
+			}
 		}
-		keyl_out = keyl;
+
+		// if it is the first time we are seeing this structure, then we must populate it as well
+		
+		std::map<Key, std::string> new_record_map;
 	}
 
-	void info(std::string& s_out) override {
-		std::string s = INFO_TEXT;
-		s_out = s;
+	void change_next(const ServerAddr& assigned_next) override {
+		logger->log(Logger::Debug, "change-next");
+		next_addr = assigned_next;
+		next_socket = std::shared_ptr<TTransport>(new TSocket(next_addr.ip, next_addr.port));
+		std::shared_ptr<TTransport> next_transport(new TBufferedTransport(next_socket));
+		std::shared_ptr<TProtocol> next_protocol(new TBinaryProtocol(next_transport));
+		next_rpc_client = std::unique_ptr<CyhgSvcClient>(new CyhgSvcClient(next_protocol));
+		// memory leak? @fix
+	}
+
+	void get(GetResponse& response, const Key& key) override { // @todo not found etc
+		if (record_map.count(key) != 0) {
+			response.record.key = key;
+			response.record.value = record_map[key];
+			response.status = StatusCode::OK;
+		} else {
+			response.status = StatusCode::NOT_FOUND;
+		}
+	}
+
+	void put(const Record& record) {
+		record_map[record.key] = record.value;
 	}
 };
 
-int main(int argc, char** argv) {
-	
-	bool init_server = argc == 3; // @todo
+int main(int argc, char** argv) { // @todo
+	bool init_server = argc == 3;
 
 	if (!(argc == 3 || argc == 5)){
 		std::cout << "Arguments: [self.ip] [self.port]" << std::endl;
-		std::cout << "Arguments: [self.ip] [self.port] [reach.ip] [reach.port]" << std::endl;
+		std::cout << "Arguments: [self.ip] [self.port] [init.ip] [init.port]" << std::endl;
 		return 0;
 	}
 	std::string this_ip = argv[1];
@@ -260,32 +241,26 @@ int main(int argc, char** argv) {
 	thisAddr.port = this_port;
 
 	if (init_server) {
-		TSimpleServer server(
-			std::make_shared<CyhgSvcProcessor>(std::make_shared<CyhgSvcHandler>(thisAddr)),
+		TThreadedServer server(
+			std::make_shared<CyhgSvcProcessor>(std::make_shared<CyhgSvcHandler>(thisAddr, Logger::Debug)),
 			std::make_shared<TServerSocket>(this_port),
 			std::make_shared<TBufferedTransportFactory>(),
 			std::make_shared<TBinaryProtocolFactory>()
 		);
-		std::cout << "Starting the server on " << this_ip <<  ":" << this_port << "..." << std::endl;
-
 		server.serve();
 	} else {
 		ServerAddr refAddr;
 		refAddr.ip = argv[3];
 		refAddr.port = std::stoi(argv[4]);
 
-		TSimpleServer server(
-			std::make_shared<CyhgSvcProcessor>(std::make_shared<CyhgSvcHandler>(thisAddr, refAddr)),
+		TThreadedServer server(
+			std::make_shared<CyhgSvcProcessor>(std::make_shared<CyhgSvcHandler>(thisAddr, refAddr, Logger::Debug)),
 			std::make_shared<TServerSocket>(this_port),
 			std::make_shared<TBufferedTransportFactory>(),
 			std::make_shared<TBinaryProtocolFactory>()
 		);
-		std::cout << "Starting the server on " << this_ip <<  ":" << this_port << "..." << std::endl;
-
 		server.serve();
 	}
 
-
 	return 1;
 }
-
