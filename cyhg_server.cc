@@ -3,6 +3,7 @@
 #include <string>
 #include <chrono>
 #include <memory>
+#include <mutex>
 
 #include <thrift/transport/TSocket.h>
 #include <thrift/transport/TBufferTransports.h>
@@ -16,7 +17,7 @@
 #include "gen-cpp/CyhgSvc.h"
 #include "hash.h"
 #include "log.h"
- 
+
 #define INFO_TEXT "Hash-Guy version 0.3 jul-17/2020"
 using namespace apache::thrift;
 using namespace apache::thrift::protocol;
@@ -72,11 +73,11 @@ class CyhgSvcHandler : public CyhgSvcIf {
 		return true;
 	}
 
-public:
+	public:
 	CyhgSvcHandler()  = default;
 
 	CyhgSvcHandler(ServerAddr& local_addr, Logger::LogLevel logging_level) {
-	// initial node constructor
+		// initial node constructor
 		node_id = 0;
 		logger->name = "Server " + std::to_string(node_id);
 		logger->log_level = logging_level;
@@ -91,7 +92,7 @@ public:
 	}
 
 	CyhgSvcHandler(ServerAddr&  local_addr, ServerAddr& join_node_addr, Logger::LogLevel logging_level) {
-	// joiner node constructor
+		// joiner node constructor
 		node_addr = local_addr;
 		node_init = false;
 		node_last = true;
@@ -132,7 +133,7 @@ public:
 		last_socket->open();
 		last_rpc_client->join_response(join_struct);
 		last_socket->close();
-		
+
 		// new server has been intialized.
 		// repopulate and inform
 
@@ -143,9 +144,9 @@ public:
 			std::shared_ptr<TProtocol> next_protocol(new TBinaryProtocol(next_transport));
 			next_rpc_client = std::unique_ptr<CyhgSvcClient>(new CyhgSvcClient(next_protocol));
 		}
-		
+
 		std::vector<std::vector<Record>> moving_records(srvs_in_ring);
-		std::map<Key, std::string> new_record_map;
+		tbb_un_map new_record_map;
 
 		for (const auto& [k, v] : record_map) {
 			auto dest = dest_func(k, srvs_in_ring);
@@ -155,6 +156,8 @@ public:
 				moving_records[dest].push_back(make_record(k, v));
 			}
 		}
+
+		record_map = new_record_map;
 
 		next_socket->open();
 		next_rpc_client->join_update(srvs_in_ring, moving_records);
@@ -188,7 +191,7 @@ public:
 		// we do not need to go through our list and pack moving_records further if we
 		// are not getting a new new_num_srvs
 		// simply take and forward
-		
+
 		if (new_num_srvs == srvs_in_ring) {
 			for (const Record& rec : moving_records[node_id]) {
 				record_map[rec.key] = rec.value;
@@ -196,8 +199,8 @@ public:
 		}
 
 		// if it is the first time we are seeing this structure, then we must populate it as well
-		
-		std::map<Key, std::string> new_record_map;
+
+		tbb_un_map new_record_map; // @todo
 	}
 
 	void change_next(const ServerAddr& assigned_next) override {
@@ -228,7 +231,7 @@ public:
 int main(int argc, char** argv) { // @todo
 	bool init_server = argc == 3;
 
-	if (!(argc == 3 || argc == 5)){
+	if (!(argc == 3 || argc == 5)) {
 		std::cout << "Arguments: [self.ip] [self.port]" << std::endl;
 		std::cout << "Arguments: [self.ip] [self.port] [init.ip] [init.port]" << std::endl;
 		return 0;
@@ -242,11 +245,11 @@ int main(int argc, char** argv) { // @todo
 
 	if (init_server) {
 		TThreadedServer server(
-			std::make_shared<CyhgSvcProcessor>(std::make_shared<CyhgSvcHandler>(thisAddr, Logger::Debug)),
-			std::make_shared<TServerSocket>(this_port),
-			std::make_shared<TBufferedTransportFactory>(),
-			std::make_shared<TBinaryProtocolFactory>()
-		);
+				std::make_shared<CyhgSvcProcessor>(std::make_shared<CyhgSvcHandler>(thisAddr, Logger::Debug)),
+				std::make_shared<TServerSocket>(this_port),
+				std::make_shared<TBufferedTransportFactory>(),
+				std::make_shared<TBinaryProtocolFactory>()
+				);
 		server.serve();
 	} else {
 		ServerAddr refAddr;
@@ -254,13 +257,14 @@ int main(int argc, char** argv) { // @todo
 		refAddr.port = std::stoi(argv[4]);
 
 		TThreadedServer server(
-			std::make_shared<CyhgSvcProcessor>(std::make_shared<CyhgSvcHandler>(thisAddr, refAddr, Logger::Debug)),
-			std::make_shared<TServerSocket>(this_port),
-			std::make_shared<TBufferedTransportFactory>(),
-			std::make_shared<TBinaryProtocolFactory>()
-		);
+				std::make_shared<CyhgSvcProcessor>(std::make_shared<CyhgSvcHandler>(thisAddr, refAddr, Logger::Debug)),
+				std::make_shared<TServerSocket>(this_port),
+				std::make_shared<TBufferedTransportFactory>(),
+				std::make_shared<TBinaryProtocolFactory>()
+				);
 		server.serve();
 	}
 
 	return 1;
 }
+
