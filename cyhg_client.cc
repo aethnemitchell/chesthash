@@ -15,9 +15,9 @@ using namespace cyhg;
 
 #define RECORDS 1000000
 
-void gen_random(std::string s, const int len) {
+void gen_random(std::string& s, const int len) {
     static const char alphanum[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        "ABCDEFGHIJKLMNOPQRSTU"; // ~10000
 
     for (int i = 0; i < len; ++i) {
         s[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
@@ -33,7 +33,7 @@ int main (int argc, char** argv) {
 	std::thread thread_pool[num_threads];
 
 
-	for (int iters=0; iters < 10; iters++) {
+	for (int iters=0; iters < 1000; iters++) {
 		auto start = high_resolution_clock::now();
 		for (int t=0; t<num_threads; t++) {
 			thread_pool[t] = std::thread([num_threads]() {
