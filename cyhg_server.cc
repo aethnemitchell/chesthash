@@ -1,6 +1,4 @@
-// @todo const auto& -> auto& const
 // @todo do we need mutex for next_socket etc???
-
 #include <iostream>
 #include <map>
 #include <string>
@@ -20,8 +18,7 @@
 #include "gen-cpp/CyhgSvc.h"
 #include "hash.h"
 #include "log.h"
-
-#define INFO_TEXT "Hash-Guy version 0.3 jul-17/2020"
+#include "utils.h"
 
 using namespace apache::thrift;
 using namespace apache::thrift::protocol;
@@ -56,34 +53,6 @@ class CyhgSvcHandler : public CyhgSvcIf {
     ServerAddr                          init_addr;
     std::shared_ptr<TTransport>         init_socket;
     std::unique_ptr<CyhgSvcClient>      init_rpc_client;
-
-    int32_t dest_func(const Key& key, int32_t number_of_servers) {
-        return (string_hash(key) % number_of_servers);
-    }
-
-    Record make_record(const Key& key, const std::string val) {
-        Record rec;
-        rec.key = key;
-        rec.value = val;
-        return rec;
-    }
-
-    bool check_empty(const std::vector<std::vector<Record>>& r) {
-        for (std::vector<Record> v : r) {
-            if (v.size() > 0) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    size_t check_size(const std::vector<std::vector<Record>>& r) {
-        size_t count = 0;
-        for (auto v : r) {
-            count += v.size();
-        }
-        return count;
-    }
 
     public:
     CyhgSvcHandler()  = default;
