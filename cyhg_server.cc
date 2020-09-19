@@ -70,17 +70,6 @@ class CyhgSvcHandler : public CyhgSvcIf {
 
         srvs_in_ring = 1;
 
-
-        // TESATING @rem
-        record_map["wew1"] = "aksfjkasjfkjalksf";
-        record_map["wew2"] = "aksfjkasjfkjalksf";
-        record_map["wew3"] = "aksfjkasjfkjalksf";
-        record_map["wew4"] = "aksfjkasjfkjalksf";
-        record_map["wew5"] = "aksfjkasjfkjalksf";
-        record_map["wew6"] = "aksfjkasjfkjalksf";
-        record_map["wew7"] = "aksfjkasjfkjalksf";
-        record_map["wew8"] = "aksfjkasjfkjalksf";
-
         logger->log(Logger::Info, "Started.");
     }
 
